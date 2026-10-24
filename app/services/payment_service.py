@@ -46,32 +46,36 @@ def _is_duplicate(db: Session, transaction_reference: str) -> bool:
 
 
 def process_webhook(db: Session, payload: PaymentWebhook) -> WebhookResult:
-    """Apply a payment callback exactly once and always record the transaction.
+    """Apply a payment callback at most once per transaction_reference.
 
-    Raises NotFoundError / ConflictError after recording the (unapplied)
-    transaction so that provider retries are treated as duplicates.
+    A reference is consumed (persisted) only when the payment is applied or a
+    non-SUCCESS status is recorded. NotFoundError / ConflictError are raised
+    without persisting anything, so a provider retry with the same reference
+    is processed normally once the underlying record is fixed.
     """
     if _is_duplicate(db, payload.transaction_reference):
         return WebhookResult(detail=DUPLICATE_DETAIL)
 
     model, initial_status, success_status = _TRANSITIONS[payload.payment_type]
+    label = "Contract" if model is Contract else "Hardware order"
     record = db.get(model, payload.reference_id)
 
-    transaction = PaymentTransaction(
-        transaction_reference=payload.transaction_reference,
-        payment_type=payload.payment_type,
-        reference_id=payload.reference_id,
-        transaction_status=payload.transaction_status,
-        applied=False,
-    )
-
-    error: NotFoundError | ConflictError | None = None
-    result: WebhookResult | None = None
-    label = "Contract" if model is Contract else "Hardware order"
-
     if record is None:
-        error = NotFoundError(f"{label} with id {payload.reference_id} not found")
-    elif payload.transaction_status != TransactionStatus.SUCCESS.value:
+        raise NotFoundError(f"{label} with id {payload.reference_id} not found")
+
+    is_success = payload.transaction_status == TransactionStatus.SUCCESS.value
+    if is_success and record.status != initial_status:
+        raise ConflictError(
+            f"{label} {payload.reference_id} is in status '{record.status}', "
+            f"expected '{initial_status}'"
+        )
+
+    if is_success:
+        record.status = success_status
+        result = WebhookResult(
+            detail="payment applied", applied=True, status=success_status
+        )
+    else:
         result = WebhookResult(
             detail=(
                 f"transaction_status is '{payload.transaction_status}'; "
@@ -80,27 +84,22 @@ def process_webhook(db: Session, payload: PaymentWebhook) -> WebhookResult:
             applied=False,
             status=record.status,
         )
-    elif record.status != initial_status:
-        error = ConflictError(
-            f"{label} {payload.reference_id} is in status '{record.status}', "
-            f"expected '{initial_status}'"
-        )
-    else:
-        record.status = success_status
-        transaction.applied = True
-        result = WebhookResult(
-            detail="payment applied", applied=True, status=success_status
-        )
 
-    db.add(transaction)
+    db.add(
+        PaymentTransaction(
+            transaction_reference=payload.transaction_reference,
+            payment_type=payload.payment_type,
+            reference_id=payload.reference_id,
+            transaction_status=payload.transaction_status,
+            applied=is_success,
+        )
+    )
     try:
         db.commit()
     except IntegrityError:
-        # A concurrent callback with the same reference won the race.
+        # A concurrent callback with the same reference won the race; the
+        # rollback also discards this request's status change.
         db.rollback()
         return WebhookResult(detail=DUPLICATE_DETAIL)
 
-    if error is not None:
-        raise error
-    assert result is not None
     return result

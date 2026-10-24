@@ -165,8 +165,8 @@ The header is only checked when `WEBHOOK_SECRET` is set in `.env`; export the sa
 | Successful payment applied                  | `200` `{"detail": "payment applied", ...}`     |
 | Same `transaction_reference` sent again     | `200` `{"detail": "duplicate callback ignored"}` |
 | `transaction_status` other than `SUCCESS`   | `200`, recorded with `applied: false`          |
-| Contract / order does not exist             | `404`                                          |
-| Record already moved past its initial status| `409`                                          |
+| Contract / order does not exist             | `404`, nothing stored; a retry with the same reference is processed normally |
+| Record already moved past its initial status| `409`, nothing stored; the reference is not consumed |
 | Wrong or missing secret (when configured)   | `401`                                          |
 
 **4. User profile**
@@ -252,7 +252,7 @@ Tests run against a temporary SQLite database and never touch your local `escrow
 - **Case-insensitive Luweero check** – `project_location` is accepted when it contains "luweero" in any casing (`"Luweero Town"`, `"Wobulenzi, Luweero"`, `"LUWEERO"`), so users aren't rejected for capitalisation. Failures return `422` with a clear message.
 - **Server-side totals** – the client sends quantities and unit prices only. The server computes each `line_total_ugx` and the order's `total_amount_ugx`, and saves the order and its items in one transaction. A client-supplied total is never trusted.
 - **Integer UGX amounts** – money is stored as `BigInteger` shillings (UGX has no minor unit in practice), avoiding floating-point errors.
-- **Idempotent webhook** – every callback is stored in `payment_transactions` with a unique `transaction_reference`. A repeated reference returns `200` without changing anything; the unique constraint also covers concurrent retries. Status changes happen only on `SUCCESS` and only from the record's initial status, otherwise `409`. Each callback is recorded with an `applied` flag for auditing.
+- **Idempotent webhook** – a `transaction_reference` is stored in `payment_transactions` (unique column) only when the callback is applied (`SUCCESS` on a record still in its initial status, `applied: true`) or when a non-`SUCCESS` status is recorded (`applied: false`). A repeated stored reference returns `200` without changing anything, and the unique constraint also covers concurrent retries. `404` (unknown record) and `409` (record not in its initial status) responses store nothing, so a legitimate Yo! Payments retry with the same reference is processed normally later instead of being dropped as a duplicate.
 - **Shared-secret check** – when `WEBHOOK_SECRET` is configured, `X-Webhook-Secret` is compared with `hmac.compare_digest` to avoid timing attacks.
 - **Contracts store names as strings** – following the spec, `engineer_name` and `client_name` are plain strings rather than foreign keys. They can be linked to `users` later without breaking the API.
 - **Users table added** – the spec references a `contractor_id` and user profiles, so a minimal `users` table backs both: orders have a real foreign key, and profiles hold the blueprint object key.
