@@ -265,3 +265,7 @@ Tests run against a temporary SQLite database and never touch your local `escrow
 - **Generous free tier** – a free Postgres database plus storage is enough for an early-stage startup to pilot in Luweero at no cost, and it scales with paid plans when traction comes.
 - **Region choice for latency to Uganda** – projects can be created in the region closest to East African users (e.g. an EU or Middle East region) to reduce round-trip time for mobile users.
 - **Easy path to deploy on Render** – the API is a standard ASGI app. On Render it runs with `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, with `DATABASE_URL`, the Supabase keys and `WEBHOOK_SECRET` set as environment variables and `alembic upgrade head` as the pre-deploy command.
+
+## How this was built
+
+I built this with an AI coding assistant (Claude Code). I chose the stack and cloud provider, broke the work into phases, wrote the specification for each step, and reviewed and tested every change. Decisions I made along the way include adding a users table to support contractor_id and profiles, treating the truncated budget value as 35,000,000 UGX, keeping blueprints in a private Supabase bucket served through signed URLs, and changing the webhook so failed (404/409) callbacks don't consume a transaction reference and block a legitimate retry. I verified the signed URLs against a live Supabase project.
