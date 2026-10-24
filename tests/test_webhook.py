@@ -16,7 +16,7 @@ def _create_contract(client: TestClient) -> int:
 
 def _webhook_payload(contract_id: int) -> dict[str, str | int]:
     return {
-        "transaction_reference": "YO-TXN-0001",
+        "transaction_reference": "TXN-YO-112233",
         "payment_type": "ESCROW_LOCK",
         "reference_id": contract_id,
         "transaction_status": "SUCCESS",

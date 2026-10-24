@@ -91,7 +91,9 @@ Open http://127.0.0.1:8000/docs (Swagger UI) to try every endpoint from the brow
 
 ### curl
 
-The examples use bash syntax. In PowerShell, call `curl.exe` (not the `curl` alias) and replace each `\` line continuation with a backtick.
+All examples use the challenge brief's sample payloads. The brief's budget value appeared truncated ("35"), so `35000000` UGX (35 million) is used as the example milestone budget.
+
+The examples below use bash syntax; see [PowerShell (Invoke-RestMethod)](#powershell-invoke-restmethod) for Windows equivalents.
 
 **1. Create a milestone contract**
 
@@ -99,10 +101,10 @@ The examples use bash syntax. In PowerShell, call `curl.exe` (not the `curl` ali
 curl -X POST http://127.0.0.1:8000/api/v1/contracts/create \
   -H "Content-Type: application/json" \
   -d '{
-    "engineer_name": "Alex Mukasa",
-    "client_name": "Sarah Nakato",
-    "project_location": "Luweero Town Council",
-    "milestone_title": "Foundation and Slab",
+    "engineer_name": "John Doe",
+    "client_name": "Luweero Property Developers Ltd",
+    "project_location": "Luweero Town",
+    "milestone_title": "Foundation Concrete Pour",
     "milestone_budget_ugx": 35000000
   }'
 ```
@@ -116,15 +118,15 @@ curl -X POST http://127.0.0.1:8000/api/v1/store/order \
   -H "Content-Type: application/json" \
   -d '{
     "contractor_id": 12,
-    "delivery_site_location": "Luweero Town Council, Plot 14",
+    "delivery_site_location": "Wobulenzi, Luweero",
     "items": [
-      {"product_id": 101, "product_name": "Hima Cement 50kg", "quantity": 40, "unit_price_ugx": 35000},
-      {"product_id": 205, "product_name": "Y12 Steel Bar", "quantity": 25, "unit_price_ugx": 42000}
+      {"product_id": 101, "product_name": "Tororo Cement Bag", "quantity": 50, "unit_price_ugx": 32000},
+      {"product_id": 204, "product_name": "Electrical Conduit Pipe", "quantity": 15, "unit_price_ugx": 8500}
     ]
   }'
 ```
 
-Returns `201` with the order, its items and `"total_amount_ugx": 2450000`, computed on the server. An unknown `contractor_id` returns `404`.
+Returns `201` with the order, its items (line totals `1600000` and `127500`) and `"total_amount_ugx": 1727500`, all computed on the server. An unknown `contractor_id` returns `404`.
 
 **3. Payment webhook**
 
@@ -135,7 +137,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/mock-payment/webhook \
   -H "Content-Type: application/json" \
   -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
   -d '{
-    "transaction_reference": "YO-TXN-0001",
+    "transaction_reference": "TXN-YO-112233",
     "payment_type": "ESCROW_LOCK",
     "reference_id": 1,
     "transaction_status": "SUCCESS"
@@ -149,7 +151,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/mock-payment/webhook \
   -H "Content-Type: application/json" \
   -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
   -d '{
-    "transaction_reference": "YO-TXN-0002",
+    "transaction_reference": "TXN-YO-112234",
     "payment_type": "STORE_PURCHASE",
     "reference_id": 1,
     "transaction_status": "SUCCESS"
@@ -186,6 +188,57 @@ curl http://127.0.0.1:8000/api/v1/users/profile/4
 
 `cloud_storage_blueprint_url` is a signed URL when `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set, the bucket's public URL when only `SUPABASE_URL` is set (or signing fails), and `null` when Supabase is not configured. An unknown id returns `404`.
 
+### PowerShell (Invoke-RestMethod)
+
+```powershell
+$base = "http://127.0.0.1:8000/api/v1"
+
+# 1. Create a milestone contract
+$contract = @{
+    engineer_name        = "John Doe"
+    client_name          = "Luweero Property Developers Ltd"
+    project_location     = "Luweero Town"
+    milestone_title      = "Foundation Concrete Pour"
+    milestone_budget_ugx = 35000000
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "$base/contracts/create" -ContentType "application/json" -Body $contract
+
+# 2. Place a hardware order
+$order = @{
+    contractor_id          = 12
+    delivery_site_location = "Wobulenzi, Luweero"
+    items = @(
+        @{ product_id = 101; product_name = "Tororo Cement Bag"; quantity = 50; unit_price_ugx = 32000 }
+        @{ product_id = 204; product_name = "Electrical Conduit Pipe"; quantity = 15; unit_price_ugx = 8500 }
+    )
+} | ConvertTo-Json -Depth 3
+Invoke-RestMethod -Method Post -Uri "$base/store/order" -ContentType "application/json" -Body $order
+
+# 3. Payment webhook (escrow lock, then store purchase)
+$headers = @{}
+if ($env:WEBHOOK_SECRET) { $headers["X-Webhook-Secret"] = $env:WEBHOOK_SECRET }
+$escrow = @{
+    transaction_reference = "TXN-YO-112233"
+    payment_type          = "ESCROW_LOCK"
+    reference_id          = 1
+    transaction_status    = "SUCCESS"
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "$base/mock-payment/webhook" -ContentType "application/json" -Headers $headers -Body $escrow
+
+$purchase = @{
+    transaction_reference = "TXN-YO-112234"
+    payment_type          = "STORE_PURCHASE"
+    reference_id          = 1
+    transaction_status    = "SUCCESS"
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "$base/mock-payment/webhook" -ContentType "application/json" -Headers $headers -Body $purchase
+
+# 4. User profile
+Invoke-RestMethod -Uri "$base/users/profile/4"
+```
+
+Set `$env:WEBHOOK_SECRET` to the value in `.env` if you configured one.
+
 ### Automated tests
 
 ```bash
@@ -196,7 +249,7 @@ Tests run against a temporary SQLite database and never touch your local `escrow
 
 ## Design decisions
 
-- **Case-insensitive Luweero check** – `project_location` is accepted when it contains "luweero" in any casing (`"Luweero Town Council"`, `"LUWEERO"`, `"luweero district"`), so users aren't rejected for capitalisation. Failures return `422` with a clear message.
+- **Case-insensitive Luweero check** – `project_location` is accepted when it contains "luweero" in any casing (`"Luweero Town"`, `"Wobulenzi, Luweero"`, `"LUWEERO"`), so users aren't rejected for capitalisation. Failures return `422` with a clear message.
 - **Server-side totals** – the client sends quantities and unit prices only. The server computes each `line_total_ugx` and the order's `total_amount_ugx`, and saves the order and its items in one transaction. A client-supplied total is never trusted.
 - **Integer UGX amounts** – money is stored as `BigInteger` shillings (UGX has no minor unit in practice), avoiding floating-point errors.
 - **Idempotent webhook** – every callback is stored in `payment_transactions` with a unique `transaction_reference`. A repeated reference returns `200` without changing anything; the unique constraint also covers concurrent retries. Status changes happen only on `SUCCESS` and only from the record's initial status, otherwise `409`. Each callback is recorded with an `applied` flag for auditing.
